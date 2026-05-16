@@ -5,7 +5,7 @@
   <version>1.1.0</version>
   <description>
     ROS 2 USB camera package using the V4L2 interface.
-    Captures MJPEG frames with reconnection support and publishes compressed image and camera info topics.
+    Captures MJPEG frames with reconnection support and publishes raw, compressed, and camera info topics.
   </description>
   <maintainer email="makochishima043@gmail.com">Ziyang Zhong</maintainer>
   <license>MIT</license>
@@ -16,6 +16,7 @@
   <depend>rclcpp_components</depend>
   <depend>sensor_msgs</depend>
   <depend>camera_info_manager</depend>
+  <depend>libopencv-dev</depend>
 
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>

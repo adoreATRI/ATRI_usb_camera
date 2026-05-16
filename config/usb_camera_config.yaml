@@ -3,6 +3,7 @@ usb_camera_node:
     camera_device_v4l_url: $(var camera_path)  # /dev/v4l/by-id/...
     camera_info_url: "package://usb_camera/config/camera_info.yaml"
     image_topic: "usb_camera/image/compressed"
+    image_raw_topic: "usb_camera/image_raw"
     camera_info_topic: "usb_camera/camera_info"
     frame_id: "camera_optical_frame"
 

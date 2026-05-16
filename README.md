@@ -10,7 +10,7 @@
 
 ### 1.1 项目简介
 
-ATRI_usb_camera 是基于Linux V4L2接口的USB相机ROS2功能包，支持JPEG格式视频采集，相机后插和断线重连功能。
+ATRI_usb_camera 是基于Linux V4L2接口的USB相机ROS2功能包，支持JPEG格式视频采集和断线重连功能。
 
 ### 1.2 目录结构
 
@@ -33,9 +33,17 @@ usb_camera/
 
 - ROS: [Humble](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html)
 - Linux V4L2 设备支持
+- OpenCV
 
 ### 1.4 逻辑框架
+
 ![图像采集逻辑](./docs/图像采集逻辑.png)
+
+### 1.5 功能介绍
+
+- **图像采集**：通过 V4L2 接口从 USB 相机采集图像，默认使用 JPEG 压缩格式，同时支持原始 BGR 格式输出（有image_raw 订阅者时才用OpenCV解码发布）。
+- **断线重连**：支持相机断线后自动重连功能，确保系统的鲁棒性。
+- **参数回调**：使用ROS2的参数回调功能，支持动态调整曝光时间、亮度、对比度、饱和度等参数，方便在运行时优化图像质量。
 
 ## 2. 编译
 
@@ -52,6 +60,7 @@ colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 | `camera_device_v4l_url` | 相机设备路径，`/dev/v4l/by-id/` 下的稳定路径 | `/dev/v4l/by-id/...` |
 | `camera_info_url` | 相机内参文件 URL | `package://usb_camera/config/camera_info.yaml` |
 | `image_topic` | 压缩图像发布话题 | `usb_camera/image/compressed` |
+| `image_raw_topic` | 原始 BGR 图像发布话题 | `usb_camera/image_raw` |
 | `camera_info_topic` | 相机内参发布话题 | `usb_camera/camera_info` |
 | `frame_id` | 图像和内参消息使用的坐标系 | `camera_optical_frame` |
 | `image_width` | 图像宽度 | `1280` |
@@ -96,5 +105,4 @@ ros2 param set /usb_camera_node brightness 60
 ros2 param set /usb_camera_node contrast 50
 ros2 param set /usb_camera_node saturation 60
 ```
-
 

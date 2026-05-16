@@ -14,6 +14,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
+#include "sensor_msgs/msg/image.hpp"
 
 namespace usb_camera
 {
@@ -51,6 +52,7 @@ private:
   std::string camera_device_url_;
   std::string camera_info_url_;
   std::string image_topic_;
+  std::string image_raw_topic_;
   std::string camera_info_topic_;
   std::string frame_id_;
   OnSetParametersCallbackHandle::SharedPtr params_callback_handle_;
@@ -70,6 +72,7 @@ private:
   sensor_msgs::msg::CameraInfo camera_info_msg_;
   std::unique_ptr<camera_info_manager::CameraInfoManager> camera_info_manager_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr image_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_raw_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub_;
 };
 

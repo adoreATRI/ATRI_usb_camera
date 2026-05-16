@@ -14,6 +14,9 @@
 #include <sys/select.h>
 #include <unistd.h>
 
+// OpenCV
+#include <opencv2/imgcodecs.hpp>
+
 namespace usb_camera
 {
 
@@ -24,6 +27,7 @@ USBCameraNode::USBCameraNode(const rclcpp::NodeOptions & options) : Node("usb_ca
   camera_device_url_ = this->declare_parameter("camera_device_v4l_url", "");
   camera_info_url_ = this->declare_parameter("camera_info_url", "");
   image_topic_ = this->declare_parameter("image_topic", "usb_camera/image/compressed");
+  image_raw_topic_ = this->declare_parameter("image_raw_topic", "usb_camera/image_raw");
   camera_info_topic_ = this->declare_parameter("camera_info_topic", "usb_camera/camera_info");
   frame_id_ = this->declare_parameter("frame_id", "camera_optical_frame");
 
@@ -44,6 +48,8 @@ USBCameraNode::USBCameraNode(const rclcpp::NodeOptions & options) : Node("usb_ca
 
   image_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
     image_topic_, rclcpp::SensorDataQoS());
+  image_raw_pub_ =
+    this->create_publisher<sensor_msgs::msg::Image>(image_raw_topic_, rclcpp::SensorDataQoS());
   camera_info_pub_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(
     camera_info_topic_, rclcpp::SensorDataQoS());
 
@@ -416,6 +422,29 @@ void USBCameraNode::captureLoop()
     camera_info_msg_.header = image_msg.header;
 
     image_pub_->publish(image_msg);
+
+    if (image_raw_pub_->get_subscription_count() > 0) {
+      cv::Mat decoded_image = cv::imdecode(image_msg.data, cv::IMREAD_COLOR);
+      if (decoded_image.empty()) {
+        RCLCPP_WARN(this->get_logger(), "Failed to decode MJPEG frame");
+      } else {
+        if (!decoded_image.isContinuous()) {
+          decoded_image = decoded_image.clone();
+        }
+
+        sensor_msgs::msg::Image image_raw_msg;
+        image_raw_msg.header = image_msg.header;
+        image_raw_msg.height = static_cast<uint32_t>(decoded_image.rows);
+        image_raw_msg.width = static_cast<uint32_t>(decoded_image.cols);
+        image_raw_msg.encoding = "bgr8";
+        image_raw_msg.is_bigendian = false;
+        image_raw_msg.step = static_cast<uint32_t>(decoded_image.step);
+        image_raw_msg.data.assign(
+          decoded_image.data, decoded_image.data + image_raw_msg.step * image_raw_msg.height);
+        image_raw_pub_->publish(image_raw_msg);
+      }
+    }
+
     camera_info_pub_->publish(camera_info_msg_);
 
     requeue_buffer(buf);

@@ -20,16 +20,18 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(camera_info_manager REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgcodecs)
 find_package(sensor_msgs REQUIRED)
 
 add_library(usb_camera_node SHARED src/usb_camera_node.cpp)
 
 target_include_directories(
   usb_camera_node
-  PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+  PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> ${OpenCV_INCLUDE_DIRS})
 
 ament_target_dependencies(usb_camera_node camera_info_manager rclcpp
                           rclcpp_components sensor_msgs)
+target_link_libraries(usb_camera_node ${OpenCV_LIBRARIES})
 
 rclcpp_components_register_node(
   usb_camera_node PLUGIN "usb_camera::USBCameraNode" EXECUTABLE
