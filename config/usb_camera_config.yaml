@@ -7,6 +7,9 @@ usb_camera_node:
     camera_info_topic: "usb_camera/camera_info"
     frame_id: "camera_optical_frame"
 
+    restart_time: 0.5
+    delay_time: 0.1
+
     image_width: 1280
     image_height: 720
     frame_rate: 60

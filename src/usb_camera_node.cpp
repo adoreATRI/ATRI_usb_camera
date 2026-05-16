@@ -236,6 +236,17 @@ void USBCameraNode::declareParameters()
   img_width_ = this->declare_parameter("image_width", 1280);
   img_height_ = this->declare_parameter("image_height", 720);
 
+  rcl_interfaces::msg::ParameterDescriptor time_param_desc;
+  time_param_desc.floating_point_range.resize(1);
+  time_param_desc.floating_point_range[0].from_value = 0.001;
+  time_param_desc.floating_point_range[0].to_value = 10.0;
+
+  time_param_desc.description = "Camera reopen retry interval (seconds)";
+  restart_time_ = this->declare_parameter("restart_time", 0.5, time_param_desc);
+
+  time_param_desc.description = "Frame capture timeout (seconds)";
+  delay_time_ = this->declare_parameter("delay_time", 0.1, time_param_desc);
+
   rcl_interfaces::msg::ParameterDescriptor param_desc;
   param_desc.integer_range.resize(1);
   param_desc.integer_range[0].step = 1;
@@ -324,6 +335,14 @@ rcl_interfaces::msg::SetParametersResult USBCameraNode::parametersCallback(
         setV4L2ControlOrWarn(V4L2_CID_SATURATION, saturation_.load(), "saturation");
       }
       RCLCPP_INFO(this->get_logger(), "Saturation: %d", saturation_.load());
+
+    } else if (name == "restart_time") {
+      restart_time_ = param.as_double();
+      RCLCPP_INFO(this->get_logger(), "Restart time: %.3f s", restart_time_.load());
+
+    } else if (name == "delay_time") {
+      delay_time_ = param.as_double();
+      RCLCPP_INFO(this->get_logger(), "Delay time: %.3f s", delay_time_.load());
     }
   }
 
@@ -347,7 +366,7 @@ void USBCameraNode::captureLoop()
       if (openCameraV4L2()) {
         camera_connected_ = true;
       } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::this_thread::sleep_for(std::chrono::duration<double>(restart_time_.load()));
         continue;
       }
     }
@@ -356,9 +375,12 @@ void USBCameraNode::captureLoop()
     FD_ZERO(&fds);
     FD_SET(v4l2_fd_, &fds);
 
+    const auto delay_time = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::duration<double>(delay_time_.load()));
+
     struct timeval tv = {};
-    tv.tv_sec = 1;
-    tv.tv_usec = 0;
+    tv.tv_sec = static_cast<time_t>(delay_time.count() / 1000000);
+    tv.tv_usec = static_cast<suseconds_t>(delay_time.count() % 1000000);
 
     int r = select(v4l2_fd_ + 1, &fds, nullptr, nullptr, &tv);
     if (r < 0 && errno == EINTR) {

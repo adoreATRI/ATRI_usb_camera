@@ -63,6 +63,8 @@ colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 | `image_raw_topic` | 原始 BGR 图像发布话题 | `usb_camera/image_raw` |
 | `camera_info_topic` | 相机内参发布话题 | `usb_camera/camera_info` |
 | `frame_id` | 图像和内参消息使用的坐标系 | `camera_optical_frame` |
+| `restart_time` | 打开相机失败后的重试等待时间，单位秒 | `0.5` |
+| `delay_time` | 单帧采集等待超时时间，单位秒 | `0.1` |
 | `image_width` | 图像宽度 | `1280` |
 | `image_height` | 图像高度 | `720` |
 | `frame_rate` | 采集帧率 | `60` |
@@ -105,4 +107,3 @@ ros2 param set /usb_camera_node brightness 60
 ros2 param set /usb_camera_node contrast 50
 ros2 param set /usb_camera_node saturation 60
 ```
-

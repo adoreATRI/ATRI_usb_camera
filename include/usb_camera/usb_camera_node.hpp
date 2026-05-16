@@ -64,6 +64,8 @@ private:
   std::atomic<int> brightness_{60};
   std::atomic<int> contrast_{50};
   std::atomic<int> saturation_{60};
+  std::atomic<double> restart_time_{0.5};
+  std::atomic<double> delay_time_{0.1};
 
   std::atomic<bool> running_{false};
   std::atomic<bool> camera_connected_{false};
