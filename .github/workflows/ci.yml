@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    name: ROS 2 Humble build and test
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: ros_ws/src/ATRI_usb_camera
+
+      - name: Setup ROS 2
+        uses: ros-tooling/setup-ros@v0.7
+        with:
+          required-ros-distributions: humble
+
+      - name: Install developer tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang clang-format clang-tidy libxml2-utils python3-pip
+          python3 -m pip install --user pre-commit
+
+      - name: Install ROS dependencies
+        working-directory: ${{ github.workspace }}/ros_ws
+        run: |
+          source /opt/ros/humble/setup.bash
+          rosdep update
+          rosdep install --from-paths src --ignore-src --rosdistro humble -r -y
+
+      - name: Run pre-commit checks
+        working-directory: ${{ github.workspace }}/ros_ws/src/ATRI_usb_camera
+        run: |
+          python3 -m pre_commit run --all-files --show-diff-on-failure
+
+      - name: Build
+        working-directory: ${{ github.workspace }}/ros_ws
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --packages-select usb_camera --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+      - name: Run clang-tidy
+        working-directory: ${{ github.workspace }}/ros_ws/src/ATRI_usb_camera
+        run: |
+          source /opt/ros/humble/setup.bash
+          clang-tidy -p ../../build/usb_camera src/usb_camera_node.cpp
+
+      - name: Test
+        working-directory: ${{ github.workspace }}/ros_ws
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon test --packages-select usb_camera
+          colcon test-result --verbose
