@@ -24,12 +24,19 @@ USBCameraNode::USBCameraNode(const rclcpp::NodeOptions & options) : Node("usb_ca
 {
   RCLCPP_INFO(this->get_logger(), "USBCameraNode started.");
 
+  // 参数声明和初始化
   camera_device_url_ = this->declare_parameter("camera_device_v4l_url", "");
   camera_info_url_ = this->declare_parameter("camera_info_url", "");
+
   image_topic_ = this->declare_parameter("image_topic", "usb_camera/image/compressed");
   image_raw_topic_ = this->declare_parameter("image_raw_topic", "usb_camera/image_raw");
   camera_info_topic_ = this->declare_parameter("camera_info_topic", "usb_camera/camera_info");
   frame_id_ = this->declare_parameter("frame_id", "camera_optical_frame");
+
+  max_fail_count_ = this->declare_parameter("max_fail_count", 5);
+  v4l2_buffers_requested_count_ = this->declare_parameter("v4l2_buffers_requested_count", 4);
+  restart_time_ = this->declare_parameter("restart_time", 0.5);
+  frame_timeout_time_ = this->declare_parameter("frame_timeout_time", 0.1);
 
   camera_info_manager_ =
     std::make_unique<camera_info_manager::CameraInfoManager>(this, "usb_camera");
@@ -46,6 +53,9 @@ USBCameraNode::USBCameraNode(const rclcpp::NodeOptions & options) : Node("usb_ca
     RCLCPP_WARN(this->get_logger(), "Invalid camera info URL: %s", camera_info_url_.c_str());
   }
 
+  declareParameters();
+
+  // publisher
   image_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
     image_topic_, rclcpp::SensorDataQoS());
   image_raw_pub_ =
@@ -53,11 +63,10 @@ USBCameraNode::USBCameraNode(const rclcpp::NodeOptions & options) : Node("usb_ca
   camera_info_pub_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(
     camera_info_topic_, rclcpp::SensorDataQoS());
 
-  declareParameters();
-
   params_callback_handle_ = this->add_on_set_parameters_callback(
     std::bind(&USBCameraNode::parametersCallback, this, std::placeholders::_1));
 
+  // 采集线程
   RCLCPP_INFO(this->get_logger(), "Starting capture thread...");
   running_ = true;
   capture_thread_ = std::thread(&USBCameraNode::captureLoop, this);
@@ -82,7 +91,7 @@ bool USBCameraNode::openCameraV4L2()
 {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  v4l2_fd_ = open(camera_device_url_.c_str(), O_RDWR | O_NONBLOCK);
+  v4l2_fd_ = open(camera_device_url_.c_str(), O_RDWR | O_NONBLOCK);  // 非阻塞方式读写打开相机
   if (v4l2_fd_ < 0) {
     RCLCPP_ERROR(
       this->get_logger(), "Failed to open camera %s: %s", camera_device_url_.c_str(),
@@ -90,40 +99,42 @@ bool USBCameraNode::openCameraV4L2()
     return false;
   }
 
+  // 设置视频格式
   struct v4l2_format fmt = {};
   fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
   fmt.fmt.pix.width = img_width_;
   fmt.fmt.pix.height = img_height_;
-  fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
+  fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;  // V4L2_PIX_FMT_YUYV 设定为 YUYV 格式采集
   fmt.fmt.pix.field = V4L2_FIELD_NONE;
-
   if (ioctl(v4l2_fd_, VIDIOC_S_FMT, &fmt) < 0) {
     RCLCPP_ERROR(this->get_logger(), "Failed to set video format: %s", std::strerror(errno));
     closeCameraV4L2Locked();
     return false;
   }
 
+  // 设置视频流参数
   struct v4l2_streamparm parm = {};
   parm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
   parm.parm.capture.timeperframe.numerator = 1;
-  parm.parm.capture.timeperframe.denominator = frame_rate_.load();
+  parm.parm.capture.timeperframe.denominator =
+    frame_rate_.load();  // timeperframe = numerator / denominator
   if (ioctl(v4l2_fd_, VIDIOC_S_PARM, &parm) < 0) {
     RCLCPP_WARN(this->get_logger(), "Failed to set frame rate to %d", frame_rate_.load());
   }
 
+  // 设定相机控制项参数
   applyV4L2Controls();
 
+  // 申请缓冲区
   struct v4l2_requestbuffers req = {};
-  req.count = 4;
+  req.count = v4l2_buffers_requested_count_;
   req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
   req.memory = V4L2_MEMORY_MMAP;
-
   if (ioctl(v4l2_fd_, VIDIOC_REQBUFS, &req) < 0) {
     RCLCPP_ERROR(this->get_logger(), "Failed to request buffers: %s", std::strerror(errno));
     closeCameraV4L2Locked();
     return false;
   }
-
   if (req.count == 0) {
     RCLCPP_ERROR(this->get_logger(), "Camera driver did not allocate any buffers");
     closeCameraV4L2Locked();
@@ -137,16 +148,17 @@ bool USBCameraNode::openCameraV4L2()
     buf.memory = V4L2_MEMORY_MMAP;
     buf.index = i;
 
+    // 查询缓冲区
     if (ioctl(v4l2_fd_, VIDIOC_QUERYBUF, &buf) < 0) {
       RCLCPP_ERROR(this->get_logger(), "Failed to query buffer %d: %s", i, std::strerror(errno));
       closeCameraV4L2Locked();
       return false;
     }
 
+    // 映射缓冲区
     v4l2_buffers_[i].length = buf.length;
     v4l2_buffers_[i].start =
       mmap(nullptr, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, v4l2_fd_, buf.m.offset);
-
     if (v4l2_buffers_[i].start == MAP_FAILED) {
       RCLCPP_ERROR(this->get_logger(), "Failed to mmap buffer %d: %s", i, std::strerror(errno));
       closeCameraV4L2Locked();
@@ -154,6 +166,7 @@ bool USBCameraNode::openCameraV4L2()
     }
   }
 
+  // 将缓冲区放入驱动采集队列
   for (unsigned int i = 0; i < req.count; ++i) {
     struct v4l2_buffer buf = {};
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -167,6 +180,7 @@ bool USBCameraNode::openCameraV4L2()
     }
   }
 
+  // 采集视频流
   enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
   if (ioctl(v4l2_fd_, VIDIOC_STREAMON, &type) < 0) {
     RCLCPP_ERROR(this->get_logger(), "Failed to start stream: %s", std::strerror(errno));
@@ -185,6 +199,7 @@ void USBCameraNode::closeCameraV4L2()
 
 void USBCameraNode::closeCameraV4L2Locked()
 {
+  // 已加锁调用
   if (v4l2_fd_ >= 0) {
     enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     ioctl(v4l2_fd_, VIDIOC_STREAMOFF, &type);
@@ -203,6 +218,7 @@ void USBCameraNode::closeCameraV4L2Locked()
 
 bool USBCameraNode::setV4L2Control(int id, int value)
 {
+  //v4l2_control 结构体用于设置 V4L2 控制项的值。通过 ioctl 调用 VIDIOC_S_CTRL 命令将控制项值写入驱动。
   struct v4l2_control ctrl = {};
   ctrl.id = id;
   ctrl.value = value;
@@ -219,7 +235,7 @@ void USBCameraNode::setV4L2ControlOrWarn(int id, int value, const char * name)
 
 void USBCameraNode::applyV4L2Controls()
 {
-  if (exposure_time_mode_.load() == 0) {
+  if (exposure_time_mode_.load() == 1) {
     setV4L2ControlOrWarn(V4L2_CID_EXPOSURE_AUTO, 1, "exposure_auto");
     setV4L2ControlOrWarn(V4L2_CID_EXPOSURE_ABSOLUTE, exposure_time_.load(), "exposure_absolute");
   } else {
@@ -236,17 +252,7 @@ void USBCameraNode::declareParameters()
   img_width_ = this->declare_parameter("image_width", 1280);
   img_height_ = this->declare_parameter("image_height", 720);
 
-  rcl_interfaces::msg::ParameterDescriptor time_param_desc;
-  time_param_desc.floating_point_range.resize(1);
-  time_param_desc.floating_point_range[0].from_value = 0.001;
-  time_param_desc.floating_point_range[0].to_value = 10.0;
-
-  time_param_desc.description = "Camera reopen retry interval (seconds)";
-  restart_time_ = this->declare_parameter("restart_time", 0.5, time_param_desc);
-
-  time_param_desc.description = "Frame capture timeout (seconds)";
-  delay_time_ = this->declare_parameter("delay_time", 0.1, time_param_desc);
-
+  // 相机参数描述
   rcl_interfaces::msg::ParameterDescriptor param_desc;
   param_desc.integer_range.resize(1);
   param_desc.integer_range[0].step = 1;
@@ -258,8 +264,8 @@ void USBCameraNode::declareParameters()
 
   param_desc.description = "Exposure mode";
   param_desc.integer_range[0].from_value = 0;
-  param_desc.integer_range[0].to_value = 3;
-  exposure_time_mode_ = this->declare_parameter("exposure_time_mode", 0, param_desc);
+  param_desc.integer_range[0].to_value = 1;
+  exposure_time_mode_ = this->declare_parameter("exposure_time_mode", 1, param_desc);
 
   param_desc.description = "Exposure time";
   param_desc.integer_range[0].from_value = 1;
@@ -297,7 +303,7 @@ rcl_interfaces::msg::SetParametersResult USBCameraNode::parametersCallback(
     if (name == "exposure_time_mode") {
       exposure_time_mode_ = param.as_int();
       if (camera_opened) {
-        if (exposure_time_mode_ == 0) {
+        if (exposure_time_mode_ == 1) {
           setV4L2ControlOrWarn(V4L2_CID_EXPOSURE_AUTO, 1, "exposure_auto");
           setV4L2ControlOrWarn(
             V4L2_CID_EXPOSURE_ABSOLUTE, exposure_time_.load(), "exposure_absolute");
@@ -309,7 +315,7 @@ rcl_interfaces::msg::SetParametersResult USBCameraNode::parametersCallback(
 
     } else if (name == "exposure_time") {
       exposure_time_ = param.as_int();
-      if (camera_opened && exposure_time_mode_ == 0) {
+      if (camera_opened && exposure_time_mode_ == 1) {
         setV4L2ControlOrWarn(
           V4L2_CID_EXPOSURE_ABSOLUTE, exposure_time_.load(), "exposure_absolute");
       }
@@ -335,24 +341,15 @@ rcl_interfaces::msg::SetParametersResult USBCameraNode::parametersCallback(
         setV4L2ControlOrWarn(V4L2_CID_SATURATION, saturation_.load(), "saturation");
       }
       RCLCPP_INFO(this->get_logger(), "Saturation: %d", saturation_.load());
-
-    } else if (name == "restart_time") {
-      restart_time_ = param.as_double();
-      RCLCPP_INFO(this->get_logger(), "Restart time: %.3f s", restart_time_.load());
-
-    } else if (name == "delay_time") {
-      delay_time_ = param.as_double();
-      RCLCPP_INFO(this->get_logger(), "Delay time: %.3f s", delay_time_.load());
     }
   }
-
   return result;
 }
 
 void USBCameraNode::captureLoop()
 {
   int fail_count = 0;
-  constexpr int max_fail_count = 5;
+  // 定义放回缓冲区lambda函数
   auto requeue_buffer = [this](v4l2_buffer & buffer) {
     if (ioctl(v4l2_fd_, VIDIOC_QBUF, &buffer) < 0) {
       RCLCPP_WARN(this->get_logger(), "Failed to requeue buffer: %s", std::strerror(errno));
@@ -366,7 +363,7 @@ void USBCameraNode::captureLoop()
       if (openCameraV4L2()) {
         camera_connected_ = true;
       } else {
-        std::this_thread::sleep_for(std::chrono::duration<double>(restart_time_.load()));
+        std::this_thread::sleep_for(std::chrono::duration<double>(restart_time_));
         continue;
       }
     }
@@ -375,12 +372,12 @@ void USBCameraNode::captureLoop()
     FD_ZERO(&fds);
     FD_SET(v4l2_fd_, &fds);
 
-    const auto delay_time = std::chrono::duration_cast<std::chrono::microseconds>(
-      std::chrono::duration<double>(delay_time_.load()));
+    const auto frame_timeout_time = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::duration<double>(frame_timeout_time_));
 
     struct timeval tv = {};
-    tv.tv_sec = static_cast<time_t>(delay_time.count() / 1000000);
-    tv.tv_usec = static_cast<suseconds_t>(delay_time.count() % 1000000);
+    tv.tv_sec = static_cast<time_t>(frame_timeout_time.count() / 1000000);
+    tv.tv_usec = static_cast<suseconds_t>(frame_timeout_time.count() % 1000000);
 
     int r = select(v4l2_fd_ + 1, &fds, nullptr, nullptr, &tv);
     if (r < 0 && errno == EINTR) {
@@ -391,7 +388,7 @@ void USBCameraNode::captureLoop()
         RCLCPP_WARN(this->get_logger(), "Camera select failed: %s", std::strerror(errno));
       }
       fail_count++;
-      if (fail_count >= max_fail_count) {
+      if (fail_count >= max_fail_count_) {
         RCLCPP_ERROR(this->get_logger(), "Camera timeout, reconnecting...");
         closeCameraV4L2();
         camera_connected_ = false;
@@ -400,6 +397,7 @@ void USBCameraNode::captureLoop()
       continue;
     }
 
+    // 缓冲区出队
     struct v4l2_buffer buf = {};
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     buf.memory = V4L2_MEMORY_MMAP;
@@ -410,7 +408,7 @@ void USBCameraNode::captureLoop()
       }
       RCLCPP_WARN(this->get_logger(), "Failed to dequeue buffer: %s", std::strerror(errno));
       fail_count++;
-      if (fail_count >= max_fail_count) {
+      if (fail_count >= max_fail_count_) {
         closeCameraV4L2();
         camera_connected_ = false;
         fail_count = 0;
@@ -418,6 +416,7 @@ void USBCameraNode::captureLoop()
       continue;
     }
 
+    // 成功获取帧，重置失败计数
     fail_count = 0;
 
     if (buf.index >= v4l2_buffers_.size()) {
@@ -425,7 +424,6 @@ void USBCameraNode::captureLoop()
       requeue_buffer(buf);
       continue;
     }
-
     const auto & v4l2_buffer = v4l2_buffers_[buf.index];
     if (buf.bytesused == 0 || buf.bytesused > v4l2_buffer.length) {
       RCLCPP_WARN(
@@ -434,17 +432,17 @@ void USBCameraNode::captureLoop()
       continue;
     }
 
+    // 发布压缩图像消息
     sensor_msgs::msg::CompressedImage image_msg;
     image_msg.header.stamp = this->now();
     image_msg.header.frame_id = frame_id_;
     image_msg.format = "jpeg";
-
     const uint8_t * jpeg_data = static_cast<const uint8_t *>(v4l2_buffer.start);
     image_msg.data.assign(jpeg_data, jpeg_data + buf.bytesused);
     camera_info_msg_.header = image_msg.header;
-
     image_pub_->publish(image_msg);
 
+    // 解码发布原始图像消息
     if (image_raw_pub_->get_subscription_count() > 0) {
       cv::Mat decoded_image = cv::imdecode(image_msg.data, cv::IMREAD_COLOR);
       if (decoded_image.empty()) {
@@ -453,7 +451,6 @@ void USBCameraNode::captureLoop()
         if (!decoded_image.isContinuous()) {
           decoded_image = decoded_image.clone();
         }
-
         sensor_msgs::msg::Image image_raw_msg;
         image_raw_msg.header = image_msg.header;
         image_raw_msg.height = static_cast<uint32_t>(decoded_image.rows);
@@ -467,6 +464,7 @@ void USBCameraNode::captureLoop()
       }
     }
 
+    // 发布相机内参
     camera_info_pub_->publish(camera_info_msg_);
 
     requeue_buffer(buf);
@@ -474,6 +472,7 @@ void USBCameraNode::captureLoop()
 
   closeCameraV4L2();
 }
+
 }  // namespace usb_camera
 
 #include "rclcpp_components/register_node_macro.hpp"

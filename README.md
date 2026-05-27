@@ -63,12 +63,14 @@ colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 | `image_raw_topic` | 原始 BGR 图像发布话题 | `usb_camera/image_raw` |
 | `camera_info_topic` | 相机内参发布话题 | `usb_camera/camera_info` |
 | `frame_id` | 图像和内参消息使用的坐标系 | `camera_optical_frame` |
-| `restart_time` | 打开相机失败后的重试等待时间，单位秒 | `0.5` |
-| `delay_time` | 单帧采集等待超时时间，单位秒 | `0.1` |
+| `max_fail_count` | 连续失败的最大次数，超过该次数后将尝试重启摄像头 | `5` |
+| `v4l2_buffers_requested_count` | 请求的V4L2缓冲区数量 | `4` |
+| `restart_time` | 重启摄像头的时间间隔，单位为秒 | `0.5` |
+| `frame_timeout_time` | 等待摄像头帧的超时时间，单位为秒 | `0.1` |
 | `image_width` | 图像宽度 | `1280` |
 | `image_height` | 图像高度 | `720` |
 | `frame_rate` | 采集帧率 | `60` |
-| `exposure_time_mode` | 曝光模式，`0` 通常表示手动曝光 | `0` |
+| `exposure_time_mode` | 曝光模式，`1` 表示手动曝光 | `1` |
 | `exposure_time` | 曝光时间 | `170` |
 | `brightness` | 亮度 | `60` |
 | `contrast` | 对比度 | `50` |

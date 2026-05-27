@@ -49,12 +49,22 @@ private:
   int v4l2_fd_{-1};
   std::vector<V4L2Buffer> v4l2_buffers_;
 
+  // 节点参数
+  // 设备和内参路径
   std::string camera_device_url_;
   std::string camera_info_url_;
+  // 话题参数
   std::string image_topic_;
   std::string image_raw_topic_;
   std::string camera_info_topic_;
   std::string frame_id_;
+  // 采集线程参数
+  int max_fail_count_;
+  int v4l2_buffers_requested_count_;
+  double restart_time_;
+  double frame_timeout_time_;
+
+  // 参数回调
   OnSetParametersCallbackHandle::SharedPtr params_callback_handle_;
   int img_width_{1280};
   int img_height_{720};
@@ -64,8 +74,6 @@ private:
   std::atomic<int> brightness_{60};
   std::atomic<int> contrast_{50};
   std::atomic<int> saturation_{60};
-  std::atomic<double> restart_time_{0.5};
-  std::atomic<double> delay_time_{0.1};
 
   std::atomic<bool> running_{false};
   std::atomic<bool> camera_connected_{false};
